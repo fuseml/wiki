@@ -142,8 +142,7 @@ Examples of trainer artifacts:
 
 ### Predictors
 
-
-
+# Higher Level Design Concepts
 
 ## Artifact Store
 
@@ -183,3 +182,4 @@ Not planned ATM.
 ### Data Artifact Store
 
 Not planned ATM.
+
