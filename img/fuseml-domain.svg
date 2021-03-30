@@ -191,9 +191,9 @@
   </g>
   <g class="com.sun.star.drawing.CustomShape">
    <g id="id19">
-    <rect class="BoundingBox" stroke="none" fill="none" x="23216" y="274620" width="6099" height="2352"/>
-    <path fill="none" stroke="rgb(52,101,164)" d="M 26265,276970 L 23217,276970 23217,274621 29313,274621 29313,276970 26265,276970 Z"/>
-    <text class="TextShape"><tspan class="TextParagraph" font-family="Liberation Sans, sans-serif" font-size="353px" font-weight="400"><tspan class="TextPosition" x="23664" y="275064"><tspan fill="rgb(0,0,0)" stroke="none">           </tspan><tspan fill="rgb(0,0,0)" stroke="none">inheritance</tspan></tspan></tspan><tspan class="TextParagraph" font-family="Liberation Sans, sans-serif" font-size="353px" font-weight="400"><tspan class="TextPosition" x="23467" y="275852"><tspan fill="rgb(0,0,0)" stroke="none">             </tspan><tspan fill="rgb(0,0,0)" stroke="none">dependency</tspan></tspan></tspan><tspan class="TextParagraph" font-family="Liberation Sans, sans-serif" font-size="353px" font-weight="400"><tspan class="TextPosition" x="23537" y="276640"><tspan fill="rgb(0,0,0)" stroke="none">            </tspan><tspan fill="rgb(0,0,0)" stroke="none">composition</tspan></tspan></tspan></text>
+    <rect class="BoundingBox" stroke="none" fill="none" x="23216" y="274620" width="4583" height="2352"/>
+    <path fill="none" stroke="rgb(52,101,164)" d="M 25507,276970 L 23217,276970 23217,274621 27797,274621 27797,276970 25507,276970 Z"/>
+    <text class="TextShape"><tspan class="TextParagraph" font-family="Liberation Sans, sans-serif" font-size="353px" font-weight="400"><tspan class="TextPosition" x="24649" y="275064"><tspan fill="rgb(0,0,0)" stroke="none">inheritance</tspan></tspan></tspan><tspan class="TextParagraph" font-family="Liberation Sans, sans-serif" font-size="353px" font-weight="400"><tspan class="TextPosition" x="24550" y="275852"><tspan fill="rgb(0,0,0)" stroke="none">dependency</tspan></tspan></tspan><tspan class="TextParagraph" font-family="Liberation Sans, sans-serif" font-size="353px" font-weight="400"><tspan class="TextPosition" x="24571" y="276640"><tspan fill="rgb(0,0,0)" stroke="none">composition</tspan></tspan></tspan></text>
    </g>
   </g>
   <g class="com.sun.star.drawing.LineShape">

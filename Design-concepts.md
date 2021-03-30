@@ -171,7 +171,7 @@ FuseML does not make it mandatory that all steps in a pipeline register their ou
 
 # Repositories
 
-<img src="./img/fuseml-domain-2.svg">
+<img src="./img/fuseml-design.svg">
 
 ## Artifact Store
 
@@ -251,3 +251,11 @@ To simplify lifecycle management for artifact workload agents, the same mechanis
 * a special type of runnable, similar to a predictor, is used to run workload agents, exposing a REST or gRPC API that is consumed by the FuseML core services
 * FuseML provides all the items needed to simplify defining and implementing new agent runnables: base classes, wrappers, base container images etc.
 
+# Minimal Design
+
+For FuseML to be functional, the following design elements and components are needed at a minimum:
+* codesets, runnables and their built-in stores
+* pipelines and a pipeline store
+* the built-in tekton workload agent and one 3rd party workload agent used for inference serving (e.g. KFServing)
+
+<img src="./img/fuseml-design-minimal.svg">
