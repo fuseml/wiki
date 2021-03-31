@@ -241,13 +241,13 @@ To be detailed.
 
 ## Workload Agents
 
-Runnable artifacts are objects at rest, they embed all the necessary software requirements, configuration files and a description of thow they can be executed, but it takes additional information to fully describe the runtime environment and a runtime engine to transform runnables into actual workloads.
+Runnable artifacts are objects at rest, they embed all the necessary software requirements, configuration files and a description of how they can be executed, but it takes additional information to fully describe the runtime environment and a runtime engine to transform runnables into actual workloads.
 
 In implementing an end-to-end MLOps workflow, FuseML has to orchestrate together types of automated workloads managed by AI/ML tools that are very specific in what they are doing and how they are doing it. Neural architecture search, hyperparameter tuning, distributed training, model inference serving and monitoring are just a few well defined categories of specific AI/ML workloads, and there are many other, more difficult to classify types of workloads and tools listed under AutoML. Runtime agents are services that provide the adaptation layer between the generic AI/ML workload API defined by FuseML and consumed by the core pipeline management services and the more specific 3rd party tools managing those workloads.
 
-Similar to artifact stores, the runtime agent APIs is the demarcation point where the code stops being 3rd party tool agnostic. Runtime agents that are not built-in should be implemented as standalone microservices. using a particular type of runnables.
+Similar to artifact stores, the runtime agent APIs is the demarcation point where the code stops being 3rd party tool agnostic. Runtime agents that are not built-in should be implemented as standalone microservices, using a particular type of runnables.
 
-To simplify lifecycle management for artifact workload agents, the same mechanisms implemented by FuseML and used for MLOLps could be reused for this extensibility purpose:
+To simplify lifecycle management for artifact workload agents, the same mechanisms implemented by FuseML and used for MLOps could be reused for this extensibility purpose:
 * a special type of runnable, similar to a predictor, is used to run workload agents, exposing a REST or gRPC API that is consumed by the FuseML core services
 * FuseML provides all the items needed to simplify defining and implementing new agent runnables: base classes, wrappers, base container images etc.
 
