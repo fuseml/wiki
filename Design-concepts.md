@@ -259,3 +259,11 @@ For FuseML to be functional, the following design elements and components are ne
 * the built-in tekton workload agent and one 3rd party workload agent used for inference serving (e.g. KFServing)
 
 <img src="./img/fuseml-design-minimal.svg">
+
+# Questions
+
+- What is the actual expected workflow from user perspective? Are described artefacts visible (and editable) by end user or are there more of an internal concepts? It seems potentially useful to allow users to edit (exchange/plug) various components of the whole workflow, I worry a little bit that it would become overcomplicated. 
+
+- I think ideally, user should only provide the input (i.e. codeset) and an action what to do (train/serve/etc.) with various optional arguments. But even for such a simple case (like the MLflow example), the resulting pipeline consists of several, sometimes non-trivial steps. I assume we would need to provide library (store) of such steps (built on top of runnables) that could be used to build whole pipelines. We should allow users to define (register) their own runnables, but it should not be a requirement.
+
+- Artefacts like Codeset, Runnable and Pipeline seems to be quite independent in theory and possibly not relying on specific implementation. This seems good at a first glance. However, look how the carrier based fuseml is done - gitea setup provides webhooks which are hooked to Tekton through listener service. Do you expect we build our own listener, actually making fuseml the service that executes the hooks? That might be nice again from the architecture POV, it seems unnecessary to reinvent the wheel again.
