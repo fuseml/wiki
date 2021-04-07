@@ -262,7 +262,9 @@ For FuseML to be functional, the following design elements and components are ne
 
 # Questions
 
-- What is the actual expected workflow from user perspective? Are described artefacts visible (and editable) by end user or are there more of an internal concepts? It seems potentially useful to allow users to edit (exchange/plug) various components of the whole workflow, I worry a little bit that it would become overcomplicated. 
+- What is the actual expected workflow from user perspective? Are described artefacts visible (and editable) by end user or are there more of an internal concepts? It seems potentially useful to allow users to edit (exchange/plug) various components of the whole workflow, I worry a little bit that it would become overcomplicated.
+
+A: the data scientist should only have to deal with the code part of the workflow (pushing codesets)
 
 - I think ideally, user should only provide the input (i.e. codeset) and an action what to do (train/serve/etc.) with various optional arguments. But even for such a simple case (like the MLflow example), the resulting pipeline consists of several, sometimes non-trivial steps. I assume we would need to provide library (store) of such steps (built on top of runnables) that could be used to build whole pipelines. We should allow users to define (register) their own runnables, but it should not be a requirement.
 
