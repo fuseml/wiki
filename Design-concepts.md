@@ -264,8 +264,56 @@ For FuseML to be functional, the following design elements and components are ne
 
 - What is the actual expected workflow from user perspective? Are described artefacts visible (and editable) by end user or are there more of an internal concepts? It seems potentially useful to allow users to edit (exchange/plug) various components of the whole workflow, I worry a little bit that it would become overcomplicated.
 
-A: the data scientist should only have to deal with the code part of the workflow (pushing codesets)
+A: the actual workflow can take a variety of forms, involving many actors, from people who only want to be concerned with writing ML code (data scientists), to people who want to customize everything from runnables and pipelines and all the way to writing their own extensions to integrate with additional 3rd party tools. The usual workflow would require FuseML admins to install "extensions" available in some form of marketplace, where an extension bundles together runnables, pipeline templates and workload agents. Regular FuseML users would only use these extensions and pipelines through the CLI and/or UI, so they won't be exposed to the implementation details.
+
+For example, let's say we have a FuseML instance running with the following extensions installed by the admin:
+* "MLFlow" providing a runnable and pipeline template for training ML models with MLFlow
+* "KFServing" providing a runnable and pipeline template for serving ML models with KFServing
+
+The workflow could be started by an MLOps engineer preparing a FuseML project, consisting of a git organization and a set of attached pipeline templates:
+
+```
+fuseml project create myproj
+fuseml project set myproj
+fuseml pipeline add <mlflow-training-pipeline-template-name> --name training-pipeline --input mlflow_code='code://*'
+fuseml pipeline add <kfserving-pipeline-template-name> --name serving-pipeline --input model='model://*'
+```
+If there's an end-to-end pipeline template available with sane defaults, this could even be shortened to:
+
+```
+fuseml codeset push path/to/code --name myapp
+fuseml pipeline add <end-to-end-pipeline-template-name> --name full-pipeline --input mlflow_code='code://*'
+```
+
+By specifying wildcards for inputs, the pipelines are configured to run automatically for any codesets and models registered within the project.
+
+The Data Scientists can simply publish their MLFlow code to FuseML. Something like this, for example:
+
+```
+fuseml project set myproj
+fuseml codeset push path/to/code --name myapp
+```
+
+FuseML will automatically run all pipelines configured by the MLOps engineer, making sure to maintain lineage according to versioning data, so the results that were produced out of the "current" code version can be shown with e.g.:
+
+```
+fuseml pipeline results show --current-code --recursive
+Pipeline/Run                     Inputs                                             Outputs
+------------                     ------                                             -------
+training-pipeline/1              mlflow_code: code://myproj/myapp/f3b0924           model: model://myproj/4c88e8f252be0a8e1e8e3
+serving-pipeline/1               model: model://myproj/4c88e8f252be0a8e1e8e3        url: http://myapp.myproj.10.20.30.40.nip.io/predict
+                                 predictor: sklearn (default)                       
+```
+
+The FuseML CLI can even be made to accept a --wait flag to make it wait until all pipelines directly and indirectly related to the current change have finished running, while at the same time printing information describing the pipeline steps being executed.
+
+The roles may also vary: it can be the DS who is doing everything, from project creation to code publishing.
 
 - I think ideally, user should only provide the input (i.e. codeset) and an action what to do (train/serve/etc.) with various optional arguments. But even for such a simple case (like the MLflow example), the resulting pipeline consists of several, sometimes non-trivial steps. I assume we would need to provide library (store) of such steps (built on top of runnables) that could be used to build whole pipelines. We should allow users to define (register) their own runnables, but it should not be a requirement.
 
+A: FuseML needs to provide some "built-in" runnables or steps for common pipeline operations. For example, for handling inputs and outputs (copying/mounting/registering artifacts). We could make FuseML aware of more specific AI/ML concepts like "train" and "serve", which would make it a lot easier for end users to define their workflows, but we should not be exclusive about the type of pipelines that users can run, to ensure extensibility.
+```
+
 - Artefacts like Codeset, Runnable and Pipeline seems to be quite independent in theory and possibly not relying on specific implementation. This seems good at a first glance. However, look how the carrier based fuseml is done - gitea setup provides webhooks which are hooked to Tekton through listener service. Do you expect we build our own listener, actually making fuseml the service that executes the hooks? That might be nice again from the architecture POV, it seems unnecessary to reinvent the wheel again.
+
+A: webhooks are required when FuseML isn't explicitly notified about new artifact versions being created. For example, if someone runs `git push` instead of `fuseml push` inside a git repository representing a FuseML codeset, webhooks are needed to notify FuseML about the new codeset version, because `fuseml push` also calls the FuseML API to register the new codeset version. Yes, we can rely on the direct integration between Tekton and gitea through webhooks to trigger pipelines, but the core FuseML service would have no direct visibility into what goes on with the artifacts... unless Tekton communicates this information back to FuseML ?. Tekton webhook integration will be enough for an alpha version. We'll just have to wait and see if we need to build our own webhook listener at some point, especially since the same argument might apply to other types of artifacts (runnables, models, datasets).
