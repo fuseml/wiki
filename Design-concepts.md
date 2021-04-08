@@ -260,6 +260,12 @@ For FuseML to be functional, the following design elements and components are ne
 
 <img src="./img/fuseml-design-minimal.svg">
 
+# Use Cases
+
+## End-To-End Pipeline With MLFlow and KFServing
+
+
+
 # Questions
 
 - What is the actual expected workflow from user perspective? Are described artefacts visible (and editable) by end user or are there more of an internal concepts? It seems potentially useful to allow users to edit (exchange/plug) various components of the whole workflow, I worry a little bit that it would become overcomplicated.
