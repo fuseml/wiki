@@ -290,6 +290,7 @@ Aside from these assumptions and conventions, the MLFlow extension should includ
   * register an MLFlow tracking services running in a k8s cluster (i.e. store information related to how the tracking service can be accessed: URIs and credentials for the MLFlow API and back-end storage).
   
     For the purpose of this exercise, we can assume this component is not needed and the MLFlow tracking service is always present and can be accessed using the same URIs and credentials, hard-coded somewhere inside the extension code, but this approach is not recommended.
+
 3. running MLFlow projects inside a pipeline requires setting up containers with the proper software requirements described in the `conda.yaml` file provided with the codeset. This can be done as a preparation step lauched before the MLFlow code is executed (note: this approach is already used by seldon core), but installing dependencies is time consuming. To avoid this, a special "MLFlow builder" runnable is required to create container images serving as environments for running the actual MLFlow project entry points. The "MLFlow builder" runnable could be described using the following yaml for example:
 
   ```
@@ -376,12 +377,185 @@ Aside from these assumptions and conventions, the MLFlow extension should includ
 
 ### Workflow
 
-A pipeline can only be executed when all requirements are met:
+The workflow assumes the following:
+* FuseML is installed in a kubernetes cluster and the FuseML REST API is exposed and can be accessed from outside the cluster (e.g. from a development workstation)
+* 3rd party tools (MLFlow and KFServing) are installed in the same cluster
+* extensions detailed in previous paragraphs are also installed (e.g. runnables are registered with FuseML)
 
-1. a pipeline - an instantiation of an existing pipeline template, describing what the automated workflow does
-2. all of the pipeline's inputs (artifacts, parameters) must be available. An incompletely defined pipeline cannot be executed
+Given all that, running an MLOps pipeline involves the following:
 
-FuseML makes no assumption about the order in which these requirements are met. The pipeline may be defined before its inputs are available, in which case it will be automatically triggered when all inputs become available and then subsequently when new input versions become available. Alternatively, all inputs may be available before the pipeline instance is created, in which case the pipeline can start immediately upon creation.
+1. define a pipeline template describing what the automated workflow does and what types of inputs (artifact, parameters) it needs
+2. provide all of the pipeline's inputs (artifacts, parameters). An incompletely defined pipeline (a pipeline that doesn't have values for all its inputs) cannot be executed
+
+FuseML should make no assumption about the order in which these steps need to be executed. The pipeline template may be defined before its inputs, in which case it will be automatically triggered when all inputs become available and then subsequently re-triggered whenever new input versions for artifacts are published. Alternatively, all inputs may be available before the pipeline template is created, in which case the pipeline can start immediately upon creation.
+
+The two segments of the workflow are detailed separately in the next sections and they both involve running the fuseml CLI. As a preparation step, the user must configure how the CLI can contact the FuseML API. Several mechanisms could be used for this, all of which should be supported:
+* environment variable (e.g. `export FUSEML_URL=http://fuseml.10.20.30.nip.io`)
+* command line parameter (e.g. `fuseml --url http://fuseml.10.20.30.nip.io`)
+* configuration file (e.g. `~/.fuseml/config`)
+
+Furthermore, when authentication and authorization features are implmented, user credentials will also need to be provided in a similar fashion.
+
+#### Publishing Codesets
+
+In this part of the workflow, the actor responsible for writing MLFlow code (e.g. data scientist) makes the code available to FuseML in the form of a codeset artifact. Several ways of registering FuseML codesets can be imagined, but the simplest one is by running the fuseml CLI on the same machine where the code is located:
+
+* first, create a project - a concept used to group together several codesets and possible other objects, including pipeline templates, with the purpose of applying other operations to the group as a whole (not yet detailed in this document). On the codeset side of things, this is represented by a git organization used as a parent for all codesets belonging to the project. This operation should be restricted so that only FuseML administrators or delegated roles can execute it, but for the purpose of this exercise, we'll assume everyone can do it: 
+
+  ```
+  fuseml create project --name my-ml-project --description "My first ML project with FuseML"
+  ```
+
+  What happens under the hood:
+    * the fuseml CLI calls the remote FuseML REST API to create a project, e.g.;
+
+      POST on http://fuseml.10.20.30.nip.io/api/project with body:
+      ```
+      project:
+        name: my-ml-project
+        description: |
+          My first ML project with FuseML
+      ```
+
+    * the FuseML core service calls the gitea API to create a `my-ml-project` organization (if not yet present)
+    * if everything works out ok, a success code is returned to the CLI
+
+* next, publish the code in the form of a codeset artifact, indicating the local folder where the code is located, as well as the parent project and the type of codeset (by specifying labels):
+
+  ```
+  fuseml push codeset --name my-mlflow-app --description "My first MLFlow application with FuseML" --location local/path/to/code --label mlflow --project my-ml-project --branch main
+  ```
+
+  What happens under the hood:
+    * the fuseml CLI contacts the remote FuseML REST API to check if the project exists:
+
+      GET on http://fuseml.10.20.30.nip.io/api/project?name=my-ml-project with response:
+      ```
+      project:
+        name: my-ml-project
+        description: |
+          My first ML project with FuseML
+      ```
+
+      or:
+
+      GET on http://fuseml.10.20.30.nip.io/api/project/my-ml-project with same response
+
+    * the fuseml CLI then proceeds to check whether a codeset with the same name already exists with e.g.:
+
+      GET on http://fuseml.10.20.30.nip.io/api/codeset?name=my-mlflow-app&project=my-ml-project with response 404
+
+      or:
+
+      GET on http://fuseml.10.20.30.nip.io/api/project/my-ml-project/codeset/my-mlflow-app with response 404
+
+    * then a new codeset is created, e.g.:
+
+      POST on http://fuseml.10.20.30.nip.io/api/codeset with body:
+      ```
+      codeset:
+        name: my-mlflow-app
+        description: |
+          My first MLFlow application with FuseML
+        branch: main
+        project: my-ml-project
+        labels:
+          - mlflow
+      ```
+
+      or:
+
+      POST on http://fuseml.10.20.30.nip.io/api/project/my-ml-project/codeset with body:
+      ```
+      codeset:
+        name: my-mlflow-app
+        description: |
+          My first MLFlow application with FuseML
+        branch: main
+        labels:
+          - mlflow
+      ```
+
+    * the FuseML core service calls the gitea API to create an empty git repository (if not yet present), and set up the proper credentials. The credentials should be returned to the client in the response, alongside the codeset descriptor (depicted here as user/password or auth token), or may need to be retrieved separately, e.g.:
+
+      ```
+      codeset:
+        uuid: <some unique UUID value>
+        created: <date>
+        name: my-mlflow-app
+        description: |
+          My first MLFlow application with FuseML
+        branch: main
+        project: my-ml-project
+        labels:
+          - mlflow
+        version: nil # to indicate that this is an empty repository
+        tags: []
+        auth:
+          username: <user>
+          password: <pass>
+          token: <token>
+      ```
+
+      NOTE: it's not yet clear if all this information is needed or if it can be stored entirely inside gitea, or if FuseML needs an additional persistent state storage back-end (e.g. SQL database) parallel to gitea where to store this information.
+
+    * the FuseML CLI then uses git locally to push the files to the remote repository. There should be some nice integration allowing the end user to operate on a local clone of that repository instead of having to rely on copying files to a /tmp location and sync-ing them from there, but this is outside the scope for this section.
+
+    * finally, if the git push operation succeeds, the CLI _may_ need to contact the FuseML API again to register the new codeset _version_, e.g.:
+
+      PUT on http://fuseml.10.20.30.nip.io/api/project/my-ml-project/codeset/my-mlflow-app with body:
+      ```
+      codeset:
+        version: <git commit number>
+        tags: []
+      ```
+
+      or, alternatively, just the version:
+
+      POST on http://fuseml.10.20.30.nip.io/api/project/my-ml-project/codeset/my-mlflow-app/version/\<git-commit-number\> with body:
+      ```
+      version:
+        tags: []
+      ```
+
+      NOTE: contacting the FuseML API to register new versions is just a design detail that might not be required if FuseML can rely exclusively on gitea provided webhooks. It might be required if/when external codesets are to be supported (i.e. code is stored in external git servers that don't have webhook integration available for FuseML to consume).
+
+    * when notified (either through the REST API or through the back-end gitea webhooks) of the new codeset version, the FuseML core service or its workflow engine (Tekton) must react by triggering all affected pipelines (explored in the pipeline section).
+
+* pushing additional codeset versions will look a bit different. The end user shouldn't need to provide all the information (labels, description) every time a new version is published, unless something needs to change in those attributes. 
+
+  ```
+  fuseml push codeset --name my-mlflow-app --location local/path/to/code --project my-ml-project --branch main
+  ```
+
+  Better yet, there should be some way to "cache" those attibutes locally (e.g. as files in the code location or under `~/.fuseml`), so the end user may just run:
+
+  ```
+  fuseml push codeset --location local/path/to/code
+  ```
+
+  What happens under the hood is similar to the previous example, with a few minor changes:
+    * the fuseml CLI contacts the remote FuseML REST API to check if the project and codeset already exist (and to get the required credentials needed to push new code to the repository) 
+    * next, the new code version is pushed, same as in the previous example
+    * finally, if the git push operation succeeds, the CLI _may_ again need to contact the FuseML API to register the new codeset _version_ (see NOTE in the previous example)
+    * when notified (either through the REST API or through the back-end gitea webhooks) of the new codeset version, the FuseML core service or its workflow engine (Tekton) must react by re-triggering all affected pipelines (explored in the pipeline section).
+
+* additional operations available for codesets, similar to those used internally by the pipeline logic to validate how codeset artifacts can be used as inputs for pipelines, should in theory also be available through the CLI, e.g.:
+
+  ```
+  # list all MLFlow compatible codesets (only most recent versions) in the project
+  fuseml get codeset --label mlflow --project my-ml-project
+  ```
+
+  What happens under the hood:
+    * the fuseml CLI contacts the remote FuseML REST API to run a codeset query:
+
+      GET on http://fuseml.10.20.30.nip.io/api/codeset?label=mlflow&project=my-ml-project 
+
+      GET on http://fuseml.10.20.30.nip.io/api/project/my-ml-project/codeset?label=mlflow
+
+    * the FuseML core service implements the request by means of the "codeset store" component, which in its simplest form can be just a transparent adapter that calls the gitea API to retrieve the information. In this example, it would have to access the gitea API to search for all repositories in the `my-ml-project` organization that have the associated `mlflow` label.
+
 
 # Questions
 
