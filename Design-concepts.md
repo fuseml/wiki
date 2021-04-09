@@ -169,6 +169,10 @@ Implementing generic pipeline operations without getting locked into a specific 
 
 FuseML does not make it mandatory that all steps in a pipeline register their output artifacts with an artifact store through FuseML. In some cases, it is advisable to keep artifacts anonymous, when for example artifacts are not relevant, or when it is not efficient to sync artifacts with a central store due to size concerns. Artifacts can be passed between pipeline components by using local, temporary storage. Lineage and reproducibility features will not be available, but only isolated to the pipeline steps that don't follow this convention. Interoperability (different pipeline steps implemented by different tools) is still achievable with anonymous artifacts, if they are well defined, even if they are not stored, but this still creates additional dependencies between pipeline steps regarding inter-operability and local artifact storage.
 
+NOTES to be expanded: 
+* the serving service instance is represented as the output of a pipeline component, _not_ as a component of a pipeline. In that sense, it resembles more an artifact than it is a pipeline component.
+* maybe the full lifecycle of the serving services is optional, or even completely out of scope for FuseML
+
 # Repositories
 
 <img src="./img/fuseml-design.svg">
@@ -280,13 +284,13 @@ A very basic MLFlow extension for FuseML can be built based on the following ass
 
 
 Aside from these assumptions and conventions, the MLFlow extension should include the following components:
-* an installation extension that is able to install an MLFlow tracking service
-* a 3rd party tool discovery and registration extension for MLFlow - this is MLFlow specific code that can be invoked by end users to do one of the following:
+1. an installation extension that is able to install an MLFlow tracking service
+2. a 3rd party tool discovery and registration extension for MLFlow - this is MLFlow specific code that can be invoked by end users to do one of the following:
   * discover existing MLFlow tracking services running in a k8s cluster
-  * register an MLFlow tracking services running in a k8s cluster (i.e. store information related to how the tracking service can be accessed: URIs and credentials for the MLFlow API and back-end storage)
+  * register an MLFlow tracking services running in a k8s cluster (i.e. store information related to how the tracking service can be accessed: URIs and credentials for the MLFlow API and back-end storage).
   
-  For the purpose of this exercise, we can assume this component is not needed and the MLFlow tracking service is always present and can be accessed using the same URIs and credentials, hard-coded somewhere inside the extension code, but this approach is not recommended.
-* running MLFlow projects inside a pipeline requires setting up containers with the proper software requirements described in the `conda.yaml` file provided with the codeset. This can be done as a preparation step lauched before the MLFlow code is executed (note: this approach is already used by seldon core), but installing dependencies is time consuming. To avoid this, a special "MLFlow builder" runnable is required to create container images serving as environments for running the actual MLFlow project entry points. The "MLFlow builder" runnable could be described using the following yaml for example:
+    For the purpose of this exercise, we can assume this component is not needed and the MLFlow tracking service is always present and can be accessed using the same URIs and credentials, hard-coded somewhere inside the extension code, but this approach is not recommended.
+3. running MLFlow projects inside a pipeline requires setting up containers with the proper software requirements described in the `conda.yaml` file provided with the codeset. This can be done as a preparation step lauched before the MLFlow code is executed (note: this approach is already used by seldon core), but installing dependencies is time consuming. To avoid this, a special "MLFlow builder" runnable is required to create container images serving as environments for running the actual MLFlow project entry points. The "MLFlow builder" runnable could be described using the following yaml for example:
 
   ```
   runnable:
@@ -307,7 +311,7 @@ Aside from these assumptions and conventions, the MLFlow extension should includ
     outputs:
       - name: mlflowEnvironment
         runnable:
-          path: /project/.fuseml/Dockerfile
+          path: /project/.fuseml
           labels:
             - mlflow
             - mlflow-environment
@@ -316,7 +320,52 @@ Aside from these assumptions and conventions, the MLFlow extension should includ
       - mlflow-builder
   ```
 
-  The container image should expect the input MLFlow project codeset to be mounted at the given location `/project` and generate a `Dockerfile` describing the MLFlow environment container image at the given output location `/project/.fuseml/Dockerfile`.
+  The container image should expect the input MLFlow project codeset to be mounted at the given location `/project` and generate a FuseML runnable representing the MLFlow environment container image to be used to run the MLFlow project code available in the input codeset.
+
+  Several FuseML conventions might be used to facilitate generating and registering runnables at runtime from other runnables, some of which are captured here:
+  * the builder could save two files at the indicated `/project/.fuseml` path: a `Dockerfile` describing how the image is built and a `runnable.yaml` file containing the runnable descriptor (minus the image reference bits that can be filled in by FuseML). FuseML can implement an additional step in the pipeline that takes in those files, builds the image, saves it in the internal OCI registry, then calls the FuseML API to register the new runnable using the information from the yaml file.
+  * alternatively, the builder container could take care of everything: building the image and registering the runnable with the FuseML API (i.e. by using the FuseML client)
+
+  The descriptor for the generated runnable could look like this:
+
+  ```
+  runnable:
+    name: "MLFlow environment for project <codeset-name>"
+    kind: environment
+    image:
+      registryURL: fuseml # <- this indicates that the OCI image is stored internally
+      repository: mlflow-env-<codeset-name>
+      tag:
+        - <codeset-id>
+        - latest
+      entrypoint: mlflow run --no-conda
+    inputs:
+      - name: mlflowProject
+        codeset:
+          path: /project
+          id: <codeset-id>
+          labels:
+            - mlflow
+            - mlflow-project
+    outputs:
+      - name: mlflow-model-url
+        file:
+          path: /project/.fuseml/model-url
+          labels:
+            - mlflow
+            - mlflow-model
+            - sklearn
+    labels:
+      - mlflow
+      - mlflow-environment
+  ```
+
+  Some additional notes and problems that still need to be solved regarding the generated runnable:
+  * the `<codeset-name>` and `<codeset-id>` placeholders represent the name and the ID of the MLFlow codeset used to generate the runnable
+  * an environment runnable doesn't need to be generated every time the MLFlow codeset changes, only when something changes in the `MLProject` or `conda.yaml` files. This means that the same environment runnable version can be reused for several codeset versions. How can this be reflected in the generated runnable descriptor ? For this example, the `id` field of the input codeset is set to the value of the ID of the same codeset used to generate the environment runnable, which means it can _only_ be used with that same codeset.
+  * the entrypoint parameters that are specified in the `MLProject` file for the `main` entry point should be reflected as input parameters in the runnable
+  * FuseML must define some convention that can be used by the generated environment runnable to indicate its outputs back to the pipeline logic. In this example, the convention is to save the model's URL inside a file, which the FuseML pipeline logic can read and record. This is required if the runnable's output is to be used as input by subsequent pipeline components (e.g. for prediction serving). Ideally, the model should be modeled as an FuseML artifact, same as the generated runnable. 
+
 
 ### KFServing Extensions
 
