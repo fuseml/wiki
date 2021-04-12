@@ -381,11 +381,12 @@ The workflow assumes the following:
 * FuseML is installed in a kubernetes cluster and the FuseML REST API is exposed and can be accessed from outside the cluster (e.g. from a development workstation)
 * 3rd party tools (MLFlow and KFServing) are installed in the same cluster
 * extensions detailed in previous paragraphs are also installed (e.g. runnables are registered with FuseML)
+* the fuseml CLI is installed where needed
 
 Given all that, running an MLOps pipeline involves the following:
 
-1. define a pipeline template describing what the automated workflow does and what types of inputs (artifact, parameters) it needs
-2. provide all of the pipeline's inputs (artifacts, parameters). An incompletely defined pipeline (a pipeline that doesn't have values for all its inputs) cannot be executed
+1. defining a pipeline template describing what the automated workflow does and what types of inputs (artifact, parameters) it needs
+2. providing all of the pipeline's inputs (artifacts, parameters). An incompletely defined pipeline (a pipeline that doesn't have values for all its inputs) cannot be executed
 
 FuseML should make no assumption about the order in which these steps need to be executed. The pipeline template may be defined before its inputs, in which case it will be automatically triggered when all inputs become available and then subsequently re-triggered whenever new input versions for artifacts are published. Alternatively, all inputs may be available before the pipeline template is created, in which case the pipeline can start immediately upon creation.
 
@@ -403,7 +404,7 @@ In this part of the workflow, the actor responsible for writing MLFlow code (e.g
 * first, create a project - a concept used to group together several codesets and possible other objects, including pipeline templates, with the purpose of applying other operations to the group as a whole (not yet detailed in this document). On the codeset side of things, this is represented by a git organization used as a parent for all codesets belonging to the project. This operation should be restricted so that only FuseML administrators or delegated roles can execute it, but for the purpose of this exercise, we'll assume everyone can do it: 
 
   ```
-  fuseml create project --name my-ml-project --description "My first ML project with FuseML"
+  fuseml project create --name my-ml-project --description "My first ML project with FuseML"
   ```
 
   What happens under the hood:
@@ -417,13 +418,13 @@ In this part of the workflow, the actor responsible for writing MLFlow code (e.g
           My first ML project with FuseML
       ```
 
-    * the FuseML core service calls the gitea API to create a `my-ml-project` organization (if not yet present)
+    * the FuseML core service calls the gitea API to create a `my-ml-project` organization (if not yet present). This may be part of the implementation of the "codeset store", although the concept of a project is wider than just codesets and might need to be expanded to cover other core components or even be managed by a separate component (to be determined)
     * if everything works out ok, a success code is returned to the CLI
 
 * next, publish the code in the form of a codeset artifact, indicating the local folder where the code is located, as well as the parent project and the type of codeset (by specifying labels):
 
   ```
-  fuseml push codeset --name my-mlflow-app --description "My first MLFlow application with FuseML" --location local/path/to/code --label mlflow --project my-ml-project --branch main
+  fuseml codeset push --name my-mlflow-app --description "My first MLFlow application with FuseML" --location local/path/to/code --label mlflow-project --project my-ml-project --branch main
   ```
 
   What happens under the hood:
@@ -460,7 +461,7 @@ In this part of the workflow, the actor responsible for writing MLFlow code (e.g
         branch: main
         project: my-ml-project
         labels:
-          - mlflow
+          - mlflow-project
       ```
 
       or:
@@ -473,7 +474,7 @@ In this part of the workflow, the actor responsible for writing MLFlow code (e.g
           My first MLFlow application with FuseML
         branch: main
         labels:
-          - mlflow
+          - mlflow-project
       ```
 
     * the FuseML core service calls the gitea API to create an empty git repository (if not yet present), and set up the proper credentials. The credentials should be returned to the client in the response, alongside the codeset descriptor (depicted here as user/password or auth token), or may need to be retrieved separately, e.g.:
@@ -488,7 +489,7 @@ In this part of the workflow, the actor responsible for writing MLFlow code (e.g
         branch: main
         project: my-ml-project
         labels:
-          - mlflow
+          - mlflow-project
         version: nil # to indicate that this is an empty repository
         tags: []
         auth:
@@ -525,13 +526,13 @@ In this part of the workflow, the actor responsible for writing MLFlow code (e.g
 * pushing additional codeset versions will look a bit different. The end user shouldn't need to provide all the information (labels, description) every time a new version is published, unless something needs to change in those attributes. 
 
   ```
-  fuseml push codeset --name my-mlflow-app --location local/path/to/code --project my-ml-project --branch main
+  fuseml codeset push --name my-mlflow-app --location local/path/to/code --project my-ml-project --branch main
   ```
 
   Better yet, there should be some way to "cache" those attibutes locally (e.g. as files in the code location or under `~/.fuseml`), so the end user may just run:
 
   ```
-  fuseml push codeset --location local/path/to/code
+  fuseml codeset push --location local/path/to/code
   ```
 
   What happens under the hood is similar to the previous example, with a few minor changes:
@@ -540,21 +541,106 @@ In this part of the workflow, the actor responsible for writing MLFlow code (e.g
     * finally, if the git push operation succeeds, the CLI _may_ again need to contact the FuseML API to register the new codeset _version_ (see NOTE in the previous example)
     * when notified (either through the REST API or through the back-end gitea webhooks) of the new codeset version, the FuseML core service or its workflow engine (Tekton) must react by re-triggering all affected pipelines (explored in the pipeline section).
 
+
+    NOTE: fuseml shouldn't exclude the possibility of allowing end users to run git commands directly to push new codeset versions, without involving the fuseml CLI at all. In fact, just based on the workflows detailed here, there is nothing preventing users from doing that directly, as long as they have the correct credentials.
+
 * additional operations available for codesets, similar to those used internally by the pipeline logic to validate how codeset artifacts can be used as inputs for pipelines, should in theory also be available through the CLI, e.g.:
 
   ```
   # list all MLFlow compatible codesets (only most recent versions) in the project
-  fuseml get codeset --label mlflow --project my-ml-project
+  fuseml codeset get --label mlflow-project --project my-ml-project
   ```
 
   What happens under the hood:
     * the fuseml CLI contacts the remote FuseML REST API to run a codeset query:
 
-      GET on http://fuseml.10.20.30.nip.io/api/codeset?label=mlflow&project=my-ml-project 
+      GET on http://fuseml.10.20.30.nip.io/api/codeset?label=mlflow-project&project=my-ml-project 
 
-      GET on http://fuseml.10.20.30.nip.io/api/project/my-ml-project/codeset?label=mlflow
+      GET on http://fuseml.10.20.30.nip.io/api/project/my-ml-project/codeset?label=mlflow-project
 
-    * the FuseML core service implements the request by means of the "codeset store" component, which in its simplest form can be just a transparent adapter that calls the gitea API to retrieve the information. In this example, it would have to access the gitea API to search for all repositories in the `my-ml-project` organization that have the associated `mlflow` label.
+    * the FuseML core service implements the request by means of the "codeset store" component, which in its simplest form can be just a transparent adapter that calls the gitea API to retrieve the information. In this example, it would have to access the gitea API to search for all repositories in the `my-ml-project` organization that have the associated `mlflow-project` label.
+
+#### Configuring Pipelines
+
+This part of the workflow involves the actor responsible for configuring the GitOps/MLOps automation pipelines (e.g. data engineer or devops enginner), although it's not excluded that the data scientist may have some limited involvment in this, or it can even be the same actor. 
+
+A real ML application may require not one but several pipelines and codesets being acted on by several actors to be managed together as a single MLOps workflow. Furthermore, it may be preferable that some or all of the MLOps workflow layout not only resemble, but be actually built on top of or out of the same workflows that data scientists are using during the experimentation phase, which is highly suggestive of a collaborative effort involving all these actors in building the final MLOps workflow for an ML application.
+
+The example described in this section is minimal. It assumes that in the experimentation phase, the data scientist is creating a monolith: a single logical block of code (represented by a single MLFlow codeset) that bundles together all the steps that make up the experimentation part of the pipeline required to train a machine learning model: data preparation, model definition, training and validation. However, theoretically, the FuseML design and its pipelines are flexible enough to allow data scientists to split these monoliths into modules that can be further orchestrated as individual, composable and reusable pipeline components.
+
+The following high-level composable pipeline segment templates are featured in this exercise:
+* builder segment: takes in an MLFlow compatible codeset artifact as input and generates a runnable artifact representing the environment that can be used to run any of its entry points
+* trainer segment: takes in an MLFlow compatible codeset artifact as input, runs it and outputs the resulted trained ML model
+* predictor segment: takes in a trained ML model as input, starts a prediction service for it and outputs its exposed endpoint (i.e. the URL where the service receives HTTP calls for prediction)
+
+Each of these segments can be instantiated and executed independently, as long as there are available inputs (e.g. compatible codesets and models) that they can consume and as long as the values of all other input parameters are explicitly specified (or have default values). The steps detailed in the next part will cover defining the individual pipeline templates and then building a master end-to-end pipeline composed of all three segments which is automatically run according to the available MLFlow compatible codeset versions published as detailed in the _Publishing Codesets_ section. 
+
+Before going into how runnables can be uses as building blocks for pipelines, here's what the complete end-to-end pipeline may look like _without_ the use of composable components:
+
+  ```
+  pipeline-template:
+    name: mlflow-e2e
+    inputs:
+      - name: mlflow-codeset
+        type: codeset
+        labels:
+          - mlflow-project
+      - name: predictor
+        type: string
+        default: auto
+    outputs:
+      - name: prediction-url
+        type: string
+    steps:
+      - name: mlflow-builder
+        image:
+          registryURL: ghcr.io/fuseml
+          repository: mlflow-builder
+          tag: 1.0
+        inputs:
+          - name: mlflow-codeset
+            codeset:
+              path: /project
+        outputs:
+          - name: mlflow-env
+            image:
+              fromfile: /project/.fuseml/Dockerfile
+              repository: "mlflow-builder/{{inputs[mlflow-codeset].name}}"
+              tag: "{{inputs[mlflow-codeset].version}}"
+      - name: mlflow-trainer
+        image:
+          registryURL: fuseml # <- this indicates that the OCI image is stored internally
+          repository: "mlflow-builder/{{inputs[mlflow-codeset].name}}"
+          tag: "{{inputs[mlflow-codeset].version}}"
+        inputs:
+          - name: mlflow-codeset
+            codeset:
+              path: /project
+        outputs:
+          - name: mlflow-model-url
+            fromfile: /project/.fuseml/model-url
+      - name: mlflow-predictor
+        image:
+          registryURL: ghcr.io/fuseml
+          repository: fuseml-predictor
+          tag: 1.0
+        inputs:
+          - name: model
+            value: "{{steps[mlflow-trainer].outputs[mlflow-model-url]}}"
+          - name: predictor
+            value: "{{inputs[predictor]}}"
+        outputs:
+          - name: mlflow-model-url
+            fromfile: /project/.fuseml/model-url
+  ```
+
+Some notes worth mentioning:
+* the inputs and outputs of pipeline templates are listed globally, and then subsequently referenced (by name) in the steps where they are used. This also allows the pipeline templates themselves to be reused as a composable elements, eligible to be referenced as parts of other pipeline templates, in a recursive manner.
+* the pipeline needs to support expressions such as `"mlflow-builder/{{inputs[mlflow-codeset].name}}"` which are expanded either at definition time or at runtime
+* the first and second steps, `mlflow-builder` and `mlflow-trainer`, both accept a codeset as input. FuseML expands the pipeline will the necessary job steps and resources with required to clone and mount the codeset where these job steps can use it. This way, the pipeline creator doesn't have to deal with accessing the codesets.
+* the first step, `mlflow-builder` has an output of type `image`. This is supplied by the step's container as a Dockerfile. FuseML expands the pipeline to follow up with a FuseML specific job step that takes in that Dockerfile, builds the image and saves it in the internal OCI registry. This way, the pipeline creator doesn't have to deal with container building and storing.
+
+
 
 
 # Questions
@@ -571,7 +657,8 @@ The workflow could be started by an MLOps engineer preparing a FuseML project, c
 
 ```
 fuseml project create myproj
-fuseml project set myproj
+# used to set myproj as the current project instead of supplying it explicitly to all other commands
+fuseml project set myproj  
 fuseml pipeline add <mlflow-training-pipeline-template-name> --name training-pipeline --input mlflow_code='code://*'
 fuseml pipeline add <kfserving-pipeline-template-name> --name serving-pipeline --input model='model://*'
 ```
@@ -587,7 +674,8 @@ By specifying wildcards for inputs, the pipelines are configured to run automati
 The Data Scientists can simply publish their MLFlow code to FuseML. Something like this, for example:
 
 ```
-fuseml project set myproj
+# used to set myproj as the current project instead of supplying it explicitly to all other commands
+fuseml project set myproj 
 fuseml codeset push path/to/code --name myapp
 ```
 
