@@ -575,24 +575,34 @@ The following high-level composable pipeline segment templates are featured in t
 
 Each of these segments can be instantiated and executed independently, as long as there are available inputs (e.g. compatible codesets and models) that they can consume and as long as the values of all other input parameters are explicitly specified (or have default values). The steps detailed in the next part will cover defining the individual pipeline templates and then building a master end-to-end pipeline composed of all three segments which is automatically run according to the available MLFlow compatible codeset versions published as detailed in the _Publishing Codesets_ section. 
 
+##### Inline Pipeline Templates
+
 Before going into how runnables can be uses as building blocks for pipelines, here's what the complete end-to-end pipeline may look like _without_ the use of composable components:
 
   ```
   pipeline-template:
     name: mlflow-e2e
+    description: |
+      End-to-end pipeline template that takes in an MLFlow compatible codeset,
+      runs the MLFlow project to train a model, then creates a prediction service
+      that can be used to run predictions against the model.
     inputs:
       - name: mlflow-codeset
+        description: an MLFlow compatible codeset
         type: codeset
         labels:
           - mlflow-project
       - name: predictor
+        description: type of predictor engine
         type: string
         default: auto
     outputs:
       - name: prediction-url
+        description: the URL where the exposed prediction service endpoint can
+        be contacted to run predictions 
         type: string
     steps:
-      - name: mlflow-builder
+      - name: builder
         image:
           registryURL: ghcr.io/fuseml
           repository: mlflow-builder
@@ -607,7 +617,7 @@ Before going into how runnables can be uses as building blocks for pipelines, he
               fromfile: /project/.fuseml/Dockerfile
               repository: "mlflow-builder/{{inputs[mlflow-codeset].name}}"
               tag: "{{inputs[mlflow-codeset].version}}"
-      - name: mlflow-trainer
+      - name: trainer
         image:
           registryURL: fuseml # <- this indicates that the OCI image is stored internally
           repository: "mlflow-builder/{{inputs[mlflow-codeset].name}}"
@@ -619,14 +629,14 @@ Before going into how runnables can be uses as building blocks for pipelines, he
         outputs:
           - name: mlflow-model-url
             fromfile: /project/.fuseml/model-url
-      - name: mlflow-predictor
+      - name: predictor
         image:
           registryURL: ghcr.io/fuseml
           repository: fuseml-predictor
           tag: 1.0
         inputs:
           - name: model
-            value: "{{steps[mlflow-trainer].outputs[mlflow-model-url]}}"
+            value: "{{steps[trainer].outputs[mlflow-model-url]}}"
           - name: predictor
             value: "{{inputs[predictor]}}"
         outputs:
@@ -635,11 +645,66 @@ Before going into how runnables can be uses as building blocks for pipelines, he
   ```
 
 Some notes worth mentioning:
-* the inputs and outputs of pipeline templates are listed globally, and then subsequently referenced (by name) in the steps where they are used. This also allows the pipeline templates themselves to be reused as a composable elements, eligible to be referenced as parts of other pipeline templates, in a recursive manner.
-* the pipeline needs to support expressions such as `"mlflow-builder/{{inputs[mlflow-codeset].name}}"` which are expanded either at definition time or at runtime
-* the first and second steps, `mlflow-builder` and `mlflow-trainer`, both accept a codeset as input. FuseML expands the pipeline will the necessary job steps and resources with required to clone and mount the codeset where these job steps can use it. This way, the pipeline creator doesn't have to deal with accessing the codesets.
-* the first step, `mlflow-builder` has an output of type `image`. This is supplied by the step's container as a Dockerfile. FuseML expands the pipeline to follow up with a FuseML specific job step that takes in that Dockerfile, builds the image and saves it in the internal OCI registry. This way, the pipeline creator doesn't have to deal with container building and storing.
+* the inputs and outputs of pipeline templates are listed globally, and then subsequently referenced (by name) in the steps where they are used. This also allows the pipeline templates themselves to be reused as composable elements, eligible to be referenced as parts of other pipeline templates, in a recursive manner.
+* the pipeline needs to support expressions such as `"mlflow-builder/{{inputs[mlflow-codeset].name}}"` which are expanded either at definition time or at runtime. The alternative is to hard-code those values in the template, which reduces or even altogether elliminates the value of the template.
+* the first and second steps, `builder` and `trainer`, both accept a codeset as input. FuseML expands the pipeline will the necessary job steps and resources with required to clone and mount the codeset where these job steps can use it. This way, the pipeline creator doesn't have to deal with accessing the codesets.
+* the first step, `builder` has an output of type `image`. This is supplied by the step's container at runtime as a Dockerfile. FuseML expands the pipeline to follow up with a FuseML specific job step that takes in that Dockerfile, builds the image and saves it in the internal OCI registry. This way, the pipeline creator doesn't have to deal with container building and storing and the `mlflow-builder` image can be kept simple instead of having to deal with the complexities of building container images (inside a container) and registering them with the internal registry
 
+Some issues that remain to be solved:
+* the location of and credentials needed for the MLFlow tracking service need to be passed on to the `trainer` step as environment variables. This information needs to come from somewhere, most likely some form of registry for 3rd party tool instances to which FuseML is connected at runtime. A similar situation applies to the `predictor` step, that needs a kubernetes service account to interact with the KFServing API to create the prediction service.
+* the type of predictor needed for the `predictor` step depends on the library used by the MLFlow project to train the model. It can simply be `mlflow`, as some predictors (e.g. Seldon Core) features an mlflow predictor. However, for other types of predictors (e.g. `sklearn`, `pytorch`, `tensorflow`), there is no simple way of detecting which ML library is used to save an MLFlow model. The end user might have to indicate it explicitly by using an additional codeset label that needs to be passed to the predictor step as a parameter value. 
+
+The workflow initiated by the actor responsible for managing pipeline templates may look as follows:
+* first, create a project, or use an existing project. This is just a convention used to group and organize FuseML objects together. The details are already covered in the _Publishing Codesets_ section, so it's only briefly mentioned here.
+
+  ```
+  fuseml project create --name my-ml-project --description "My first ML project with FuseML"
+  ```
+
+* next, publish the pipeline template definition described earlier.
+
+  ```
+  fuseml pipeline create --project my-ml-project -f e2e-pipeline.yaml
+  ```
+
+  What happens under the hood:
+    * the fuseml CLI calls the remote FuseML REST API to create a pipeline template, e.g.:
+
+      POST on http://fuseml.10.20.30.nip.io/api/pipeline with the pipeline yaml file contents as the body
+
+    * the FuseML core service passes the pipeline template description to the component responsible for implementing pipelines (i.e. the Tekton agent), where the pipeline template is converted into corresponding Tekton objects.
+    * note that the input codeset parameter value isn't fully defined. The FuseML core service may also perform a search, looking for all compatible codesets already published in the same project and automatically set up webhooks and even trigger pipeline runs corresponding to each compatible codeset.
+    * if everything works out ok, a success code is returned to the CLI
+
+* there should be several ways supported by FuseML in which a pipeline template can be instantiated:
+
+  1. one or more pipeline templates could be configured by the MLOps engineer to be automatically instantiated based on the availability of codesets in the same project. In our case, this means that whenever an MLFlow compatible codeset version is published anywhere in the `my-ml-project` project, a pipeline instance taking in that codeset is automatically instantiated and executed from the e2e pipeline template.
+  2. the MLOps engineer could configure one or several pipeline templates but not set them to run automatically. This is also the case when not all the values of input parameters can be inferred from codeset artifacts (or any other artifacts for that matter). Such pipeline templates need to be instantiated explicitly via the FuseML CLI. In our case, assuming that the `predictor` input parameter didn't have a default value, the e2e pipeline couldn't be instantiated automatically when a codeset is published. The actor publishing codesets (data engineer) would need to manually trigger the pipeline and provide the `predictor` value, e.g.:
+
+      ```
+      # list all pipeline templates configured for this project that are compatible with my codeset:
+      fuseml pipeline list --project my-ml-project --codeset my-mlflow-app
+      fuseml pipeline run mlflow-e2e --input predictor=sklearn --input mlflow-codeset=my-mlflow-app
+      ```
+
+      or even better, if the project and codeset are assumed to be part of the implicit CLI context:
+
+      ```
+      # list all pipeline templates compatible with my implicit codeset
+      fuseml pipeline list
+      # run the e2e pipeline with the explicit predictor value and the implicit codeset 
+      fuseml pipeline run mlflow-e2e --input predictor=sklearn
+      ```
+
+      or we could even consider a "publish-and-run" CLI shortcut:
+
+      ```
+      fuseml codeset push --location local/path/to/code --run mlflow-e2e --input predictor=sklearn
+      ```
+
+
+
+##### Composable Pipeline Templates
 
 
 
