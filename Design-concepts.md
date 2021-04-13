@@ -295,7 +295,10 @@ Aside from these assumptions and conventions, the MLFlow extension should includ
 
   ```
   runnable:
-    name: "MLFlow builder"
+    name: mlflow-builder
+    description: |
+      Builds a runnable representing a runtime environment that can be used to
+      execute the MLFlow code supplied in the input codeset
     kind: builder
     image:
       registryURL: ghcr.io/fuseml
@@ -303,19 +306,18 @@ Aside from these assumptions and conventions, the MLFlow extension should includ
       tag: 1.0
       entrypoint: /build-mlflow-env.py
     inputs:
-      - name: mlflowProject
+      - name: mlproject
+        type: codeset
         codeset:
           path: /project
           labels:
             - mlflow
             - mlflow-project
     outputs:
-      - name: mlflowEnvironment
+      - name: mlflow-env
+        type: runnable
         runnable:
-          path: /project/.fuseml
-          labels:
-            - mlflow
-            - mlflow-environment
+          frompath: /project/.fuseml/
     labels:
       - mlflow
       - mlflow-builder
@@ -327,53 +329,89 @@ Aside from these assumptions and conventions, the MLFlow extension should includ
   * the builder could save two files at the indicated `/project/.fuseml` path: a `Dockerfile` describing how the image is built and a `runnable.yaml` file containing the runnable descriptor (minus the image reference bits that can be filled in by FuseML). FuseML can implement an additional step in the pipeline that takes in those files, builds the image, saves it in the internal OCI registry, then calls the FuseML API to register the new runnable using the information from the yaml file.
   * alternatively, the builder container could take care of everything: building the image and registering the runnable with the FuseML API (i.e. by using the FuseML client)
 
-  The descriptor for the generated runnable could look like this:
+  The descriptor for the generated runnable might look like this:
 
   ```
   runnable:
-    name: "MLFlow environment for project <codeset-name>"
+    name: mlflow-env-<codeset-name>
+    description: |
+      MLFlow environment to be used for project <codeset-name>
     kind: environment
     image:
       registryURL: fuseml # <- this indicates that the OCI image is stored internally
       repository: mlflow-env-<codeset-name>
       tag:
-        - <codeset-id>
+        - <codeset-name>
         - latest
       entrypoint: mlflow run --no-conda
     inputs:
-      - name: mlflowProject
+      - name: mlproject
+        type: codeset
         codeset:
           path: /project
-          id: <codeset-id>
           labels:
             - mlflow
             - mlflow-project
+        default: "codeset://<codeset-name>/<codeset-version>"
+      - name: alpha
+        type: float
+        default: 5.0
+      - name: l1_ratio
+        type: float
+        default: 0.1
     outputs:
-      - name: mlflow-model-url
-        file:
-          path: /project/.fuseml/model-url
-          labels:
-            - mlflow
-            - mlflow-model
-            - sklearn
+      - name: model-url
+        type: string
+        fromfile: /project/.fuseml/model-url
     labels:
       - mlflow
       - mlflow-environment
   ```
 
   Some additional notes and problems that still need to be solved regarding the generated runnable:
-  * the `<codeset-name>` and `<codeset-id>` placeholders represent the name and the ID of the MLFlow codeset used to generate the runnable
-  * an environment runnable doesn't need to be generated every time the MLFlow codeset changes, only when something changes in the `MLProject` or `conda.yaml` files. This means that the same environment runnable version can be reused for several codeset versions. How can this be reflected in the generated runnable descriptor ? For this example, the `id` field of the input codeset is set to the value of the ID of the same codeset used to generate the environment runnable, which means it can _only_ be used with that same codeset.
-  * the entrypoint parameters that are specified in the `MLProject` file for the `main` entry point should be reflected as input parameters in the runnable
-  * FuseML must define some convention that can be used by the generated environment runnable to indicate its outputs back to the pipeline logic. In this example, the convention is to save the model's URL inside a file, which the FuseML pipeline logic can read and record. This is required if the runnable's output is to be used as input by subsequent pipeline components (e.g. for prediction serving). Ideally, the model should be modeled as an FuseML artifact, same as the generated runnable. 
+  * the `<codeset-name>` and `<codeset-version>` placeholders represent the name and the version of the MLFlow codeset used to generate the runnable
+  * an environment runnable doesn't need to be generated every time the MLFlow codeset changes, only when something changes in the `MLProject` or `conda.yaml` files. This means that the same environment runnable version can be reused for several codeset versions. How can this be reflected in the generated runnable descriptor ? For this example, the default value of the input codeset is set to point to the exact codeset version used to generate the environment runnable, which means by default it can _only_ be used with that same codeset.
+  * the entrypoint parameters that are specified in the `MLProject` file for the `main` entry point should be reflected as input parameters in the runnable.
+  * FuseML must define some convention that can be used by the generated environment runnable to indicate its outputs back to the pipeline logic. In this example, the convention is to save the model's URL inside a file indicated in the `fromfile` attribute, which the FuseML pipeline logic can read and record. This is required if the runnable's output is to be used as input by subsequent pipeline components (e.g. for prediction serving). Ideally, the model should be modeled as an FuseML artifact, same as the generated runnable, e.g.:
+    ```
+    outputs:
+      - name: model-url
+        type: model
+        model:
+          fromfile: /project/.fuseml/model-url
+          labels:
+            - mlflow
+            - sklearn
+    ```
+
+  * a builder might generate not one, but several runnables, each corresponding to one entry point configured in the `MLProject` file, all using the same container image
 
 
 ### KFServing Extensions
 
+A KFServing extension for FuseML can be implemented by a simple runnable that takes in a model along with some other prediction parameters and creates a KFServing prediction service for it. Its definition may look like this:
 
-### Pipeline Templates
-
-
+  ```
+  runnable:
+    name: kfserving-predictor
+    description: |
+      Creates a KFServing prediction service for the model supplied as input
+    kind: predictor
+    image:
+      registryURL: ghcr.io/fuseml
+      repository: kfserving-predictor
+      tag: 1.0
+    inputs:
+      - name: model-url
+        type: string
+      - name: predictor
+        type: string
+    outputs:
+      - name: prediction-url
+        type: string
+    labels:
+      - kfserving
+  ```
 
 ### Workflow
 
@@ -569,23 +607,23 @@ A real ML application may require not one but several pipelines and codesets bei
 The example described in this section is minimal. It assumes that in the experimentation phase, the data scientist is creating a monolith: a single logical block of code (represented by a single MLFlow codeset) that bundles together all the steps that make up the experimentation part of the pipeline required to train a machine learning model: data preparation, model definition, training and validation. However, theoretically, the FuseML design and its pipelines are flexible enough to allow data scientists to split these monoliths into modules that can be further orchestrated as individual, composable and reusable pipeline components.
 
 The following high-level composable pipeline segment templates are featured in this exercise:
-* builder segment: takes in an MLFlow compatible codeset artifact as input and generates a runnable artifact representing the environment that can be used to run any of its entry points
-* trainer segment: takes in an MLFlow compatible codeset artifact as input, runs it and outputs the resulted trained ML model
-* predictor segment: takes in a trained ML model as input, starts a prediction service for it and outputs its exposed endpoint (i.e. the URL where the service receives HTTP calls for prediction)
+* builder segment: takes in an MLFlow compatible codeset artifact as input and generates a runnable artifact representing the environment that can be used to run any of its entry points. This is based on the `mlflow-builder` runnable installed by the MLFlow extension
+* trainer segment: takes in an MLFlow compatible codeset artifact as input, runs it and outputs the resulted trained ML model. This segment is based on the runnable generated at runtime by the builder segment
+* predictor segment: takes in a trained ML model as input, starts a prediction service for it and outputs its exposed endpoint (i.e. the URL where the service receives HTTP calls for prediction). This is based on the `kfserving-predictor` runnable installed by the KFServing extension
 
 Each of these segments can be instantiated and executed independently, as long as there are available inputs (e.g. compatible codesets and models) that they can consume and as long as the values of all other input parameters are explicitly specified (or have default values). The steps detailed in the next part will cover defining the individual pipeline templates and then building a master end-to-end pipeline composed of all three segments which is automatically run according to the available MLFlow compatible codeset versions published as detailed in the _Publishing Codesets_ section. 
 
 ##### Inline Pipeline Templates
 
-Before going into how runnables can be uses as building blocks for pipelines, here's what the complete end-to-end pipeline may look like _without_ the use of composable components:
+Before going into how runnables can be used as building blocks for pipelines, here's what the complete end-to-end pipeline may look like _without_ the use of runnables as composable components:
 
   ```
   pipeline-template:
-    name: mlflow-e2e
+    name: mlflow-kfserving-e2e
     description: |
       End-to-end pipeline template that takes in an MLFlow compatible codeset,
-      runs the MLFlow project to train a model, then creates a prediction service
-      that can be used to run predictions against the model.
+      runs the MLFlow project to train a model, then creates a KFServing prediction 
+      service that can be used to run predictions against the model.
     inputs:
       - name: mlflow-codeset
         description: an MLFlow compatible codeset
@@ -632,7 +670,7 @@ Before going into how runnables can be uses as building blocks for pipelines, he
       - name: predictor
         image:
           registryURL: ghcr.io/fuseml
-          repository: fuseml-predictor
+          repository: kfserving-predictor
           tag: 1.0
         inputs:
           - name: model
@@ -640,8 +678,8 @@ Before going into how runnables can be uses as building blocks for pipelines, he
           - name: predictor
             value: "{{inputs[predictor]}}"
         outputs:
-          - name: mlflow-model-url
-            fromfile: /project/.fuseml/model-url
+          - name: prediction-url
+            fromfile: /project/.fuseml/prediction-url
   ```
 
 Some notes worth mentioning:
@@ -702,11 +740,77 @@ The workflow initiated by the actor responsible for managing pipeline templates 
       fuseml codeset push --location local/path/to/code --run mlflow-e2e --input predictor=sklearn
       ```
 
-
-
 ##### Composable Pipeline Templates
 
+Runnables are the basic composable building blocks out of which more elaborated pipeline templates can be created. Creating pipeline templates out of existing runnables or other pipeline templates could be described as follows:
+* list the components: runnables and/or other pipeline templates that are part of the template. The order in which the components need to be executed may be indicated explicitly by specifying dependency parameters. There is also an implicit order that can be inferred from the way inputs and outputs are connected 
+* optionally, list the pipeline template global inputs and outputs. These can be directly mapped to the inputs and outputs of participating components, or their values can be set to expressions referencing those inputs and outputs
+* specify values for some or all of the component inputs. The input of a component can be set to an explicit value, or directly mapped to the output of another component or of a global template input, or its value can be set to a expression referencing global inputs and other outputs. Ultimately, component inputs and outputs may be left "unconnected", in which case they will either represent global inputs and outputs, or FuseML may be instructed to automatically attempt to connect compatible inputs with compatible outputs
 
+The end to end pipeline built out of runnables published by participating extensions could look like this: 
+
+  ```
+  pipeline-template:
+    name: mlflow-kfserving-e2e
+    description: |
+      End-to-end pipeline template that takes in an MLFlow compatible codeset,
+      runs the MLFlow project to train a model, then creates a KFServing prediction 
+      service that can be used to run predictions against the model.
+    inputs:
+      - name: mlflow-codeset
+      - name: predictor
+    outputs:
+      - name: prediction-url
+    steps:
+      - name: builder
+        runnable: mlflow-builder
+        inputs:
+          - name: mlproject
+            inputref: mlflow-codeset
+      - name: trainer
+        runnable: "{{steps[builder].outputs[mlflow-env]}}"
+        inputs:
+          - name: mlproject
+            inputref: mlflow-codeset
+        after: builder
+      - name: predictor
+        runnable: kfserving-predictor
+        inputs:
+          - name: model
+            value: "{{steps[trainer].outputs[model-url]}}"
+          - name: predictor
+            inputref: predictor
+        outputs:
+          - name: prediction-url
+            outputref: prediction-url
+  ```
+
+Alternatively, if FuseML supports automatically matching inputs and outputs of components, it can be trimmed down to:
+
+  ```
+  pipeline-template:
+    name: mlflow-kfserving-e2e
+    description: |
+      End-to-end pipeline template that takes in an MLFlow compatible codeset,
+      runs the MLFlow project to train a model, then creates a KFServing prediction 
+      service that can be used to run predictions against the model.
+    steps:
+      - name: builder
+        runnable: mlflow-builder
+      - name: trainer
+        runnable: "{{steps[builder].outputs[mlflow-env]}}"
+        after: builder
+      - name: predictor
+        runnable: kfserving-predictor
+        inputs:
+          - name: model
+            value: "{{steps[trainer].outputs[model-url]}}"
+  ```
+
+
+Some observations:
+* global inputs and outputs don't need to be fully specified (e.g. to include the type, description etc.), if they are mapped to the inputs and outputs of components
+* the second step, `trainer` may need to be explicitly marked to be executed after `builder`, because its definition depends on its outcome
 
 # Questions
 
